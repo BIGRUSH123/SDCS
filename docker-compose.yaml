@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  cache-server-1:
+    build: .
+    ports:
+      - "9527:9527"
+    command: ["./cache_server", "9527"]
+    networks:
+      - cache-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9527/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  cache-server-2:
+    build: .
+    ports:
+      - "9528:9528"
+    command: ["./cache_server", "9528"]
+    networks:
+      - cache-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9528/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  cache-server-3:
+    build: .
+    ports:
+      - "9529:9529"
+    command: ["./cache_server", "9529"]
+    networks:
+      - cache-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9529/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  cache-network:
+    driver: bridge
