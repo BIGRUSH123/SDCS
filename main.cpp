@@ -152,7 +152,7 @@ public:
         httplib::Server server;
 
         // 设置CORS头
-        server.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
+        server.set_pre_routing_handler([](const httplib::Request& /* req */, httplib::Response& res) {
             res.set_header("Access-Control-Allow-Origin", "*");
             res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
             res.set_header("Access-Control-Allow-Headers", "Content-Type");
@@ -160,8 +160,15 @@ public:
         });
 
         // OPTIONS处理
-        server.Options(".*", [](const httplib::Request&, httplib::Response& res) {
+        server.Options(".*", [](const httplib::Request&, httplib::Response& /* res */) {
             return;
+        });
+
+        // 健康检查接口 - 必须放在通用路由之前
+        server.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
+            res.status = 200;
+            res.set_header("Content-Type", "application/json; charset=utf-8");
+            res.body = "{\"status\":\"ok\",\"node\":\"" + node_id + "\"}";
         });
 
         // POST / - 写入/更新缓存
@@ -171,7 +178,7 @@ public:
                 
                 for (auto& [key, value] : body.items()) {
                     string target_node = getTargetNode(key);
-                    string current_node = "http://localhost:" + to_string(port);
+                    string current_node = "http://cache-server-" + to_string(port - 9526) + ":" + to_string(port);
                     
                     if (target_node == current_node) {
                         // 数据应该存储在当前节点
@@ -197,9 +204,14 @@ public:
 
         // GET /{key} - 读取缓存
         server.Get(R"(/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
-            string key = req.matches[1];
+            if (req.matches.empty()) {
+                res.status = 400;
+                res.body = "Invalid request";
+                return;
+            }
+            string key = req.matches[0];
             string target_node = getTargetNode(key);
-            string current_node = "http://localhost:" + to_string(port);
+            string current_node = "http://cache-server-" + to_string(port - 9526) + ":" + to_string(port);
             
             json result;
             if (target_node == current_node) {
@@ -223,9 +235,14 @@ public:
 
         // DELETE /{key} - 删除缓存
         server.Delete(R"(/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
-            string key = req.matches[1];
+            if (req.matches.empty()) {
+                res.status = 400;
+                res.body = "Invalid request";
+                return;
+            }
+            string key = req.matches[0];
             string target_node = getTargetNode(key);
-            string current_node = "http://localhost:" + to_string(port);
+            string current_node = "http://cache-server-" + to_string(port - 9526) + ":" + to_string(port);
             
             int deleted = 0;
             if (target_node == current_node) {
@@ -243,7 +260,12 @@ public:
 
         // 内部RPC接口
         server.Get(R"(/internal/get/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
-            string key = req.matches[1];
+            if (req.matches.empty()) {
+                res.status = 400;
+                res.body = "Invalid request";
+                return;
+            }
+            string key = req.matches[0];
             json result = getLocal(key);
             
             if (result.is_null()) {
@@ -270,18 +292,17 @@ public:
         });
 
         server.Delete(R"(/internal/delete/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
-            string key = req.matches[1];
+            if (req.matches.empty()) {
+                res.status = 400;
+                res.body = "Invalid request";
+                return;
+            }
+            string key = req.matches[0];
             int deleted = deleteLocal(key) ? 1 : 0;
             res.status = 200;
             res.body = to_string(deleted);
         });
 
-        // 健康检查接口
-        server.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
-            res.status = 200;
-            res.set_header("Content-Type", "application/json; charset=utf-8");
-            res.body = "{\"status\":\"ok\",\"node\":\"" + node_id + "\"}";
-        });
 
         cout << "缓存节点 " << node_id << " 启动在端口 " << port << endl;
         server.listen("0.0.0.0", port);
@@ -297,11 +318,11 @@ int main(int argc, char* argv[]) {
     int port = atoi(argv[1]);
     string node_id = "node" + to_string(port);
     
-    // 配置所有节点
+    // 配置所有节点 - 使用Docker服务名称进行容器间通信
     vector<string> all_nodes = {
-        "http://localhost:9527",
-        "http://localhost:9528", 
-        "http://localhost:9529"
+        "http://cache-server-1:9527",
+        "http://cache-server-2:9528", 
+        "http://cache-server-3:9529"
     };
 
     CacheNode node(node_id, port, all_nodes);

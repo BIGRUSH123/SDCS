@@ -5,7 +5,7 @@ services:
     build: .
     ports:
       - "9527:9527"
-    command: ["./cache_server", "9527"]
+    command: ["9527"]
     networks:
       - cache-network
     healthcheck:
@@ -18,7 +18,7 @@ services:
     build: .
     ports:
       - "9528:9528"
-    command: ["./cache_server", "9528"]
+    command: ["9528"]
     networks:
       - cache-network
     healthcheck:
@@ -31,7 +31,7 @@ services:
     build: .
     ports:
       - "9529:9529"
-    command: ["./cache_server", "9529"]
+    command: ["9529"]
     networks:
       - cache-network
     healthcheck:

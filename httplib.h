@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <netdb.h>
 
 namespace httplib {
 
@@ -141,7 +142,7 @@ public:
             return false;
         }
 
-        if (listen(server_fd, 10) < 0) {
+        if (::listen(server_fd, 10) < 0) {
             std::cerr << "Listen failed" << std::endl;
             close(server_fd);
             return false;
@@ -189,15 +190,28 @@ public:
                     bool handled = false;
                     for (const auto& handler_info : handlers) {
                         if (handler_info.first == req.method) {
-                            std::regex pattern_regex(handler_info.second.first);
-                            std::smatch matches;
-                            if (std::regex_match(req.path, matches, pattern_regex)) {
-                                for (size_t i = 1; i < matches.size(); ++i) {
-                                    req.matches.push_back(matches[i].str());
+                            const std::string& pattern = handler_info.second.first;
+                            
+                            // 检查是否是精确匹配（不包含正则表达式特殊字符）
+                            if (pattern.find_first_of("()[]{}*+?^$|\\") == std::string::npos) {
+                                // 精确字符串匹配
+                                if (req.path == pattern) {
+                                    handler_info.second.second(req, res);
+                                    handled = true;
+                                    break;
                                 }
-                                handler_info.second.second(req, res);
-                                handled = true;
-                                break;
+                            } else {
+                                // 正则表达式匹配
+                                std::regex pattern_regex(pattern);
+                                std::smatch matches;
+                                if (std::regex_match(req.path, matches, pattern_regex)) {
+                                    for (size_t i = 1; i < matches.size(); ++i) {
+                                        req.matches.push_back(matches[i].str());
+                                    }
+                                    handler_info.second.second(req, res);
+                                    handled = true;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -243,7 +257,7 @@ public:
         timeout_sec = 30;
     }
 
-    void set_connection_timeout(int sec, int usec) {
+    void set_connection_timeout(int sec, int /* usec */) {
         timeout_sec = sec;
     }
 
@@ -280,11 +294,16 @@ private:
         server_addr.sin_family = AF_INET;
         server_addr.sin_port = htons(port);
         
-        if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) <= 0 &&
-            inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
-            close(sock);
-            result->status = 0;
-            return result;
+        // 尝试直接解析IP地址
+        if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) <= 0) {
+            // 如果不是IP地址，尝试解析主机名
+            struct hostent* he = gethostbyname(host.c_str());
+            if (he == nullptr) {
+                close(sock);
+                result->status = 0;
+                return result;
+            }
+            memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
         }
 
         if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
