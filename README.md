@@ -109,6 +109,17 @@ docker-compose down
 # 压力测试
 chmod +x test_stress.sh
 ./test_stress.sh 3
+
+root@:~/SDCS# sudo ./test_stress.sh 3
+test_set ...... PASS
+test_get ...... PASS
+test_set again ...... PASS
+test_delete ...... PASS
+test_get_after_delete ...... PASS
+test_delete_after_delete ...... PASS
+======================================
+Run 6 tests in 90.135 seconds.
+6 passed, 0 failed.
 ```
 
 ### 手动测试
