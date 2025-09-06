@@ -11,7 +11,7 @@
 #include <cstring>
 #include <map>
 #include "httplib.h"
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 using namespace std;
@@ -87,7 +87,7 @@ public:
         if (it != cache.end()) {
             return it->second;
         }
-        return json();
+        return json::value_t::null;
     }
 
     bool deleteLocal(const string& key) {
@@ -118,7 +118,7 @@ public:
                 cout << "RPC GET 解析JSON失败: " << e.what() << endl;
             }
         }
-        return json();
+        return json::value_t::null;
     }
 
     bool rpcSet(const string& target_node, const string& key, const json& value) {
@@ -174,9 +174,22 @@ public:
         // POST / - 写入/更新缓存
         server.Post("/", [this](const httplib::Request& req, httplib::Response& res) {
             try {
+                // 调试信息
+                cout << "收到POST请求，body长度: " << req.body.length() << endl;
+                cout << "请求体内容: '" << req.body << "'" << endl;
+                
+                if (req.body.empty()) {
+                    res.status = 400;
+                    res.set_header("Content-Type", "application/json; charset=utf-8");
+                    res.body = "{\"error\": \"Empty request body\"}";
+                    return;
+                }
+                
                 json body = json::parse(req.body);
                 
-                for (auto& [key, value] : body.items()) {
+                for (auto& item : body.items()) {
+                    string key = item.key();
+                    auto value = item.value();
                     string target_node = getTargetNode(key);
                     string current_node = "http://cache-server-" + to_string(port - 9526) + ":" + to_string(port);
                     
@@ -280,7 +293,9 @@ public:
         server.Post("/internal/set", [this](const httplib::Request& req, httplib::Response& res) {
             try {
                 json body = json::parse(req.body);
-                for (auto& [key, value] : body.items()) {
+                for (auto& item : body.items()) {
+                    string key = item.key();
+                    auto value = item.value();
                     setLocal(key, value);
                 }
                 res.status = 200;

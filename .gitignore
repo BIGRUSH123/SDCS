@@ -1,0 +1,29 @@
+# 编译产物
+cache_server
+cache_server.exe
+*.o
+*.obj
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Docker相关
+.dockerignore
+
+# 测试临时文件
+curl-format.txt
+quick_test.sh

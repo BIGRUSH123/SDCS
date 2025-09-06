@@ -3,14 +3,15 @@ FROM ubuntu:20.04
 # 设置非交互模式
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 替换为国内镜像源（这里以阿里云为例）
-RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+# 使用清华大学镜像源
+RUN sed -i 's@//.*archive.ubuntu.com@//mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/sources.list && \
+    sed -i 's@//.*security.ubuntu.com@//mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/sources.list
 
 # 安装必要的包
 RUN apt-get update && apt-get install -y \
     g++ \
     make \
+    nlohmann-json3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建工作目录
@@ -19,7 +20,6 @@ WORKDIR /app
 # 复制源代码
 COPY main.cpp .
 COPY httplib.h .
-COPY json.hpp .
 COPY Makefile .
 
 # 编译程序

@@ -11,6 +11,7 @@
 - **内部RPC**: 节点间自动路由和数据同步
 - **容器化部署**: 基于Docker和Docker Compose
 - **高可用性**: 支持3个或更多节点部署
+- **跨平台支持**: Windows 11、Ubuntu 20.04+、macOS
 
 ## 系统架构
 
@@ -66,18 +67,33 @@ curl http://127.0.0.1:9527/health
 # 返回: {"status":"ok","node":"node9527"}
 ```
 
-## 快速开始
+## 🚀 快速开始
 
 ### 前置要求
 - Docker
 - Docker Compose
 
 ### 启动服务
-```bash
-# 构建并启动所有缓存节点
-docker-compose up --build
 
-# 后台运行
+#### Windows 11
+```cmd
+# 使用批处理脚本
+build_and_run.bat
+
+# 或使用PowerShell
+powershell -ExecutionPolicy Bypass -File build_and_run.ps1
+
+# 或手动执行
+docker-compose up --build -d
+```
+
+#### Linux/macOS
+```bash
+# 使用脚本
+chmod +x build_and_run.sh
+./build_and_run.sh
+
+# 或手动执行
 docker-compose up --build -d
 ```
 
@@ -86,15 +102,28 @@ docker-compose up --build -d
 docker-compose down
 ```
 
-## 测试
+## 🧪 测试
 
 ### 自动化测试
-```bash
-# 给测试脚本执行权限
-chmod +x test.sh
 
-# 运行测试
+#### Windows
+```cmd
+# 批处理版本
+test.bat
+
+# PowerShell版本
+powershell -ExecutionPolicy Bypass -File test.ps1
+```
+
+#### Linux/macOS
+```bash
+# 基础测试
+chmod +x test.sh
 ./test.sh
+
+# 压力测试
+chmod +x test_stress.sh
+./test_stress.sh 3
 ```
 
 ### 手动测试
@@ -107,6 +136,57 @@ curl http://127.0.0.1:9528/name
 
 # 3. 删除数据
 curl -X DELETE http://127.0.0.1:9529/name
+```
+
+## 📋 平台特定说明
+
+### Windows 11
+
+#### 环境准备
+1. 安装 **Docker Desktop for Windows**
+   - 下载地址：https://www.docker.com/products/docker-desktop/
+2. 确保Docker Desktop正在运行
+3. 可选：安装Windows Terminal以获得更好的体验
+
+#### 常见问题
+- **PowerShell执行策略**: 运行 `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+- **端口占用**: 使用 `netstat -ano | findstr :9527` 检查端口
+- **编码问题**: 在cmd中运行 `chcp 65001` 设置UTF-8编码
+
+### Ubuntu 20.04+
+
+#### 环境准备
+```bash
+# 更新系统
+sudo apt update && sudo apt upgrade -y
+
+# 安装依赖
+sudo apt install -y git curl wget build-essential make g++ pkg-config jq lsof
+
+# 安装Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+
+# 安装Docker Compose
+sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+# 重新登录以应用Docker组权限
+newgrp docker
+```
+
+#### 故障排除
+```bash
+# Docker权限问题
+sudo usermod -aG docker $USER
+newgrp docker
+
+# 端口占用检查
+sudo netstat -tulpn | grep -E "9527|9528|9529"
+
+# 查看容器日志
+docker-compose logs -f
 ```
 
 ## 技术实现
@@ -133,22 +213,39 @@ curl -X DELETE http://127.0.0.1:9529/name
 .
 ├── main.cpp              # 主程序代码
 ├── httplib.h             # 简化的HTTP库实现
-├── json.hpp              # 简化的JSON库实现
 ├── Dockerfile            # Docker构建文件
 ├── docker-compose.yaml   # Docker Compose配置
 ├── Makefile             # 编译脚本
-├── test.sh              # 测试脚本
+├── build_and_run.bat    # Windows构建脚本
+├── build_and_run.ps1    # PowerShell构建脚本
+├── build_and_run.sh     # Linux/macOS构建脚本
+├── test.ps1             # PowerShell测试脚本
+├── test_simple.ps1      # 简化PowerShell测试脚本
+├── test.sh              # Linux/macOS测试脚本
+├── test_stress.sh       # Linux压力测试脚本
+├── .github/workflows/   # CI/CD配置
 └── README.md            # 项目文档
 ```
 
 ## 开发说明
 
 ### 本地编译
-```bash
-# 编译
-make
 
-# 运行单个节点
+#### Windows (Visual Studio)
+```cmd
+cl /EHsc main.cpp /I. /Fe:cache_server.exe
+cache_server.exe 9527
+```
+
+#### Linux/macOS
+```bash
+# 安装nlohmann-json库
+sudo apt install nlohmann-json3-dev  # Ubuntu/Debian
+# 或
+brew install nlohmann-json           # macOS
+
+# 编译
+g++ -std=c++17 -pthread -o cache_server main.cpp
 ./cache_server 9527
 ```
 
@@ -158,7 +255,32 @@ make
 make clean
 
 # 清理Docker
-docker-compose down --rmi all
+docker-compose down --rmi all --volumes
+```
+
+## 📊 性能监控
+
+### 查看容器状态
+```bash
+# 查看运行中的容器
+docker-compose ps
+
+# 查看容器日志
+docker-compose logs -f
+
+# 查看资源使用
+docker stats
+```
+
+### API性能测试
+```bash
+# 使用curl测试响应时间
+curl -w "@curl-format.txt" -o /dev/null http://localhost:9527/health
+
+# curl-format.txt内容：
+#      time_total:  %{time_total}\n
+#   time_connect:  %{time_connect}\n
+#time_starttransfer:  %{time_starttransfer}\n
 ```
 
 ## 系统限制
@@ -176,6 +298,28 @@ docker-compose down --rmi all
 4. 添加监控和日志功能
 5. 实现更高效的网络协议（如gRPC）
 
+## CI/CD
+
+项目包含GitHub Actions配置，支持自动化构建和测试：
+
+- 自动构建Docker镜像
+- 运行功能测试
+- 跨平台兼容性检查
+
 ## 许可证
 
 本项目仅用于学习和研究目的。
+
+---
+
+## 🆘 获取帮助
+
+如果遇到问题：
+
+1. 检查Docker是否正常运行
+2. 确认端口9527-9529未被占用
+3. 查看容器日志：`docker-compose logs`
+4. 检查防火墙设置
+5. 确保系统有足够的内存和磁盘空间
+
+**技术支持**: 请查看项目Issues或提交新的Issue。

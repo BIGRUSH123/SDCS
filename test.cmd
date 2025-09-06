@@ -1,6 +1,8 @@
 @echo off
 chcp 65001 >nul
-echo === 简单分布式缓存系统测试 (Windows 11) ===
+echo ========================================
+echo         分布式缓存系统测试 (Windows)
+echo ========================================
 echo.
 
 REM 等待服务启动
@@ -20,16 +22,16 @@ echo.
 
 echo 2. 测试写入操作
 echo 向服务器1写入 myname
-curl -s -X POST -H "Content-type: application/json" http://127.0.0.1:9527/ -d "{\"myname\": \"电子科技大学@2023\"}"
+curl -s -X POST -H "Content-Type: application/json" -d "{\"myname\": \"电子科技大学@2023\"}" http://127.0.0.1:9527/
 echo.
 echo 向服务器2写入 tasks
-curl -s -X POST -H "Content-type: application/json" http://127.0.0.1:9528/ -d "{\"tasks\": [\"task 1\", \"task 2\", \"task 3\"]}"
+curl -s -X POST -H "Content-Type: application/json" -d "{\"tasks\": [\"task 1\", \"task 2\", \"task 3\"]}" http://127.0.0.1:9528/
 echo.
 echo 向服务器3写入 age
-curl -s -X POST -H "Content-type: application/json" http://127.0.0.1:9529/ -d "{\"age\": 123}"
+curl -s -X POST -H "Content-Type: application/json" -d "{\"age\": 123}" http://127.0.0.1:9529/
 echo.
 
-echo 3. 测试读取操作（跨节点）
+echo 3. 测试读取操作
 echo 从服务器2读取 myname:
 curl -s http://127.0.0.1:9528/myname
 echo.
@@ -42,22 +44,21 @@ echo.
 
 echo 4. 测试读取不存在的键
 echo 从服务器1读取 notexistkey:
-curl -s -w "HTTP状态码: %%{http_code}" http://127.0.0.1:9527/notexistkey
-echo.
+curl -s http://127.0.0.1:9527/notexistkey
 echo.
 
 echo 5. 测试删除操作
 echo 从服务器3删除 myname:
 curl -s -X DELETE http://127.0.0.1:9529/myname
 echo.
-echo 再次从服务器1读取 myname (应该返回404):
-curl -s -w "HTTP状态码: %%{http_code}" http://127.0.0.1:9527/myname
+echo 再次读取已删除的键:
+curl -s http://127.0.0.1:9527/myname
 echo.
-echo.
-
-echo 再次删除已删除的键:
+echo 再次删除已删除的键 (应该返回0):
 curl -s -X DELETE http://127.0.0.1:9529/myname
 echo.
 
-echo === 测试完成 ===
+echo ========================================
+echo 测试完成
+echo ========================================
 pause
