@@ -79,21 +79,13 @@ curl http://127.0.0.1:9527/health
 ```cmd
 # 使用批处理脚本
 build_and_run.bat
-
-# 或使用PowerShell
-powershell -ExecutionPolicy Bypass -File build_and_run.ps1
-
 # 或手动执行
 docker-compose up --build -d
 ```
 
 #### Linux/macOS
 ```bash
-# 使用脚本
-chmod +x build_and_run.sh
-./build_and_run.sh
-
-# 或手动执行
+# 手动执行
 docker-compose up --build -d
 ```
 
@@ -109,18 +101,11 @@ docker-compose down
 #### Windows
 ```cmd
 # 批处理版本
-test.bat
-
-# PowerShell版本
-powershell -ExecutionPolicy Bypass -File test.ps1
+./test.cmd
 ```
 
 #### Linux/macOS
 ```bash
-# 基础测试
-chmod +x test.sh
-./test.sh
-
 # 压力测试
 chmod +x test_stress.sh
 ./test_stress.sh 3
@@ -155,7 +140,17 @@ curl -X DELETE http://127.0.0.1:9529/name
 
 ### Ubuntu 20.04+
 
-#### 环境准备
+在国内云服务器上安装docker请让deepseek老师教你。
+
+包括以下部分：
+
+1.配置git
+
+2.下载docker配置国内源
+
+3.clone项目并测试
+
+#### 环境准备（国内服务器没代理不适合）
 ```bash
 # 更新系统
 sudo apt update && sudo apt upgrade -y
