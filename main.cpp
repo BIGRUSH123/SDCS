@@ -40,8 +40,8 @@ struct NodeStats {
         } else {
             error_count++;
         }
-        total_response_time += response_time;
-        avg_response_time = total_response_time / request_count;
+        total_response_time.store(total_response_time.load() + response_time);
+        avg_response_time.store(total_response_time.load() / request_count.load());
         last_request = steady_clock::now();
     }
     
@@ -128,7 +128,7 @@ public:
         for (const auto& node : nodes) {
             consistent_hash.addNode(node);
             // 初始化节点统计信息
-            node_stats[node] = NodeStats();
+            node_stats.emplace(node, NodeStats());
         }
     }
 
