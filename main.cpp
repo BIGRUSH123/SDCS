@@ -32,6 +32,35 @@ struct NodeStats {
     
     NodeStats() : last_check(steady_clock::now()), last_request(steady_clock::now()) {}
     
+    // 禁用复制构造函数和赋值操作符
+    NodeStats(const NodeStats&) = delete;
+    NodeStats& operator=(const NodeStats&) = delete;
+    
+    // 允许移动构造函数和赋值操作符
+    NodeStats(NodeStats&& other) noexcept 
+        : request_count(other.request_count.load()),
+          success_count(other.success_count.load()),
+          error_count(other.error_count.load()),
+          total_response_time(other.total_response_time.load()),
+          avg_response_time(other.avg_response_time.load()),
+          is_healthy(other.is_healthy.load()),
+          last_check(other.last_check),
+          last_request(other.last_request) {}
+    
+    NodeStats& operator=(NodeStats&& other) noexcept {
+        if (this != &other) {
+            request_count.store(other.request_count.load());
+            success_count.store(other.success_count.load());
+            error_count.store(other.error_count.load());
+            total_response_time.store(other.total_response_time.load());
+            avg_response_time.store(other.avg_response_time.load());
+            is_healthy.store(other.is_healthy.load());
+            last_check = other.last_check;
+            last_request = other.last_request;
+        }
+        return *this;
+    }
+    
     // 更新请求统计
     void updateRequest(double response_time, bool success) {
         request_count++;
@@ -128,7 +157,7 @@ public:
         for (const auto& node : nodes) {
             consistent_hash.addNode(node);
             // 初始化节点统计信息
-            node_stats.emplace(node, NodeStats());
+            node_stats.try_emplace(node);
         }
     }
 
