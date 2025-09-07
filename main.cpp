@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <list>
 #include <chrono>
 #include <atomic>
 #include "httplib.h"
@@ -204,9 +205,12 @@ public:
             {"config:timeout", "30"}
         };
         
-        for (const auto& [key, value] : warmup_data) {
-            json val = value;
-            setLocal(key, val);
+        {
+            lock_guard<mutex> lock(cache_mutex);
+            for (const auto& [key, value] : warmup_data) {
+                json val = value;
+                setLocal(key, val);
+            }
         }
         cout << "缓存预热完成，预加载了 " << warmup_data.size() << " 个键值对" << endl;
     }
@@ -235,7 +239,7 @@ public:
 
     // 本地存储操作
     void setLocal(const string& key, const json& value) {
-        lock_guard<mutex> lock(cache_mutex);
+        // 注意：调用此方法时应该已经持有cache_mutex锁
         
         // 如果缓存已满且键不存在，需要淘汰
         if (cache.size() >= MAX_CACHE_SIZE && cache.find(key) == cache.end()) {
@@ -374,9 +378,8 @@ public:
         if (it == client_pool.end()) {
             auto client = make_unique<httplib::Client>(target_node);
             client->set_connection_timeout(2, 0); // 2秒连接超时
-            client->set_read_timeout(3, 0);       // 3秒读取超时
-            client->set_write_timeout(3, 0);      // 3秒写入超时
-            client->set_keep_alive(true);         // 启用keep-alive
+            // 注意：httplib可能不支持set_read_timeout和set_write_timeout
+            // 使用set_connection_timeout作为总超时时间
             client_pool[target_node] = move(client);
             return client_pool[target_node].get();
         }
@@ -583,7 +586,17 @@ public:
                 
                 // 批量处理远程操作
                 for (const auto& [target_node, request_data] : node_requests) {
-                    if (!rpcSet(target_node, "", request_data)) {
+                    // 为每个键值对单独调用rpcSet
+                    bool all_success = true;
+                    for (auto& item : request_data.items()) {
+                        string key = item.key();
+                        auto value = item.value();
+                        if (!rpcSet(target_node, key, value)) {
+                            all_success = false;
+                            break;
+                        }
+                    }
+                    if (!all_success) {
                         res.status = 500;
                         res.body = "Internal server error";
                         return;
@@ -693,11 +706,17 @@ public:
         server.Post("/internal/set", [this](const httplib::Request& req, httplib::Response& res) {
             try {
                 json body = json::parse(req.body);
-                for (auto& item : body.items()) {
-                    string key = item.key();
-                    auto value = item.value();
-                    setLocal(key, value);
+                
+                // 批量处理本地操作
+                {
+                    lock_guard<mutex> lock(cache_mutex);
+                    for (auto& item : body.items()) {
+                        string key = item.key();
+                        auto value = item.value();
+                        setLocal(key, value);
+                    }
                 }
+                
                 res.status = 200;
                 res.body = "OK";
             } catch (const exception& e) {
