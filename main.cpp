@@ -38,9 +38,12 @@ struct NodeStats {
         request_count++;
         if (success) success_count++;
         else error_count++;
-        total_response_time += response_time;
+        total_response_time.fetch_add(response_time, memory_order_relaxed);
         int total = request_count.load();
-        if (total > 0) avg_response_time.store(total_response_time / total);
+        if (total > 0) {
+            double avg = total_response_time.load(memory_order_relaxed) / total;
+            avg_response_time.store(avg, memory_order_relaxed);
+        }
         last_request = steady_clock::now();
     }
 
