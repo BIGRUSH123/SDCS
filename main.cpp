@@ -1,6 +1,3 @@
-// main.cpp — LRU 优化（使用 list::splice 将节点移动到表头，避免 erase+push_front 的潜在开销）
-// 其余主要逻辑同上次提交（包含批量 rpcSetBatch，shared_mutex 等）
-
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -117,7 +114,7 @@ public:
 class CacheNode {
 private:
     unordered_map<string, json> cache;
-    std::shared_mutex cache_mutex; // read/write lock
+    std::shared_mutex cache_mutex;
     ConsistentHash consistent_hash;
     string node_id;
     int port;
@@ -174,11 +171,9 @@ public:
         cout << "预热完成" << endl;
     }
 
-    // LRU 优化：使用 splice 将已存在节点移动到表头（O(1)）
     void updateLRU_locked(const string& key) {
         auto it = lru_map.find(key);
         if (it != lru_map.end()) {
-            // 将现有 iterator 移动到表头
             lru_order.splice(lru_order.begin(), lru_order, it->second);
             lru_map[key] = lru_order.begin();
         } else {
@@ -195,9 +190,7 @@ public:
         cache.erase(oldest);
     }
 
-    // 设置本地（需要持有 unique_lock(cache_mutex)）
     void setLocal(const string& key, const json& value) {
-        // assume caller holds unique lock
         if (cache.size() >= MAX_CACHE_SIZE && cache.find(key) == cache.end()) {
             evictLRU_locked();
         }
@@ -205,18 +198,15 @@ public:
         updateLRU_locked(key);
     }
 
-    // getLocal: 先用 shared_lock 查找并拷贝，若需更新 LRU 则短时间升级到 unique
     json getLocal(const string& key) {
         {
             std::shared_lock<shared_mutex> sl(cache_mutex);
             auto it = cache.find(key);
             if (it == cache.end()) return json::value_t::null;
             json val = it->second;
-            // 释放 shared_lock，短时加 unique 更新 LRU
             sl.unlock();
             {
                 std::unique_lock<shared_mutex> ul(cache_mutex);
-                // 再次确认键仍存在，然后移动到表头
                 if (cache.find(key) != cache.end()) {
                     updateLRU_locked(key);
                 }
@@ -236,25 +226,6 @@ public:
             lru_map.erase(lru_it);
         }
         return true;
-    }
-
-    // 健康检查后台调用
-    bool checkNodeHealth(const string& node) {
-        auto* client = getClient(node);
-        auto start = steady_clock::now();
-        auto res = client->Get("/health");
-        auto end = steady_clock::now();
-        double rt = duration_cast<milliseconds>(end - start).count();
-        bool success = res && res->status == 200;
-        {
-            lock_guard<mutex> lk(stats_mutex);
-            if (node_stats.find(node) != node_stats.end()) {
-                node_stats[node].updateRequest(rt, success);
-                node_stats[node].is_healthy = success;
-                node_stats[node].last_check = steady_clock::now();
-            }
-        }
-        return success;
     }
 
     string getLeastLoadedNode() {
@@ -295,10 +266,9 @@ public:
     }
 
     string getCurrentNodeUrl() {
-        return "http://cache-server-" + to_string(port - 9526) + ":" + to_string(port);
+        return "http://127.0.0.1:" + to_string(port);
     }
 
-    // client pool unchanged in 意图，但保留
     unordered_map<string, unique_ptr<httplib::Client>> client_pool;
     mutex client_pool_mutex;
     httplib::Client* getClient(const string& target_node) {
@@ -313,18 +283,24 @@ public:
         return it->second.get();
     }
 
-    json rpcGet(const string& target_node, const string& key) {
-        auto* client = getClient(target_node);
-        auto start = steady_clock::now();
-        auto res = client->Get("/internal/get/" + key);
-        auto end = steady_clock::now();
-        double rt = duration_cast<milliseconds>(end - start).count();
+    bool checkNodeHealth(const string& node) {
+        auto* client = getClient(node);
+        auto res = client->Get("/health");
         bool success = res && res->status == 200;
         {
             lock_guard<mutex> lk(stats_mutex);
-            if (node_stats.find(target_node) != node_stats.end()) node_stats[target_node].updateRequest(rt, success);
+            if (node_stats.find(node) != node_stats.end()) {
+                node_stats[node].is_healthy = success;
+                node_stats[node].last_check = steady_clock::now();
+            }
         }
-        if (success) {
+        return success;
+    }
+
+    json rpcGet(const string& target_node, const string& key) {
+        auto* client = getClient(target_node);
+        auto res = client->Get("/internal/get/" + key);
+        if (res && res->status == 200) {
             try { return json::parse(res->body); } catch (...) {}
         }
         return json::value_t::null;
@@ -332,30 +308,14 @@ public:
 
     bool rpcSetBatch(const string& target_node, const json& kvs) {
         auto* client = getClient(target_node);
-        auto start = steady_clock::now();
         auto res = client->Post("/internal/set", kvs.dump(), "application/json");
-        auto end = steady_clock::now();
-        double rt = duration_cast<milliseconds>(end - start).count();
-        bool success = res && res->status == 200;
-        {
-            lock_guard<mutex> lk(stats_mutex);
-            if (node_stats.find(target_node) != node_stats.end()) node_stats[target_node].updateRequest(rt, success);
-        }
-        return success;
+        return res && res->status == 200;
     }
 
     int rpcDelete(const string& target_node, const string& key) {
         auto* client = getClient(target_node);
-        auto start = steady_clock::now();
         auto res = client->Delete("/internal/delete/" + key);
-        auto end = steady_clock::now();
-        double rt = duration_cast<milliseconds>(end - start).count();
-        bool success = res && res->status == 200;
-        {
-            lock_guard<mutex> lk(stats_mutex);
-            if (node_stats.find(target_node) != node_stats.end()) node_stats[target_node].updateRequest(rt, success);
-        }
-        if (success) {
+        if (res && res->status == 200) {
             try { return stoi(res->body); } catch (...) {}
         }
         return 0;
@@ -379,40 +339,6 @@ public:
             res.body = "{\"status\":\"ok\",\"node\":\"" + node_id + "\"}";
         });
 
-        server.Get("/stats", [this](const httplib::Request&, httplib::Response& res) {
-            lock_guard<mutex> lk(stats_mutex);
-            json stats;
-            stats["node_id"] = node_id;
-            stats["current_time"] = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
-            {
-                std::shared_lock<shared_mutex> sl(cache_mutex);
-                stats["cache_size"] = cache.size();
-                stats["max_cache_size"] = MAX_CACHE_SIZE;
-                stats["cache_hit_ratio"] = cache.size() > 0 ? 0.95 : 0.0;
-            }
-            {
-                lock_guard<mutex> rl(rate_limit_mutex);
-                stats["current_request_rate"] = request_count.load();
-                stats["max_request_rate"] = MAX_REQUESTS_PER_SECOND;
-            }
-            json ns;
-            for (const auto& [node, st] : node_stats) {
-                json node_info;
-                node_info["request_count"] = st.request_count.load();
-                node_info["success_count"] = st.success_count.load();
-                node_info["error_count"] = st.error_count.load();
-                node_info["avg_response_time"] = st.avg_response_time.load();
-                node_info["error_rate"] = st.getErrorRate();
-                node_info["success_rate"] = st.getSuccessRate();
-                node_info["is_healthy"] = st.isHealthy();
-                ns[node] = node_info;
-            }
-            stats["nodes"] = ns;
-            res.status = 200;
-            res.set_header("Content-Type", "application/json; charset=utf-8");
-            res.body = stats.dump();
-        });
-
         server.Post("/", [this](const httplib::Request& req, httplib::Response& res) {
             if (!checkRateLimit()) {
                 res.status = 429;
@@ -421,38 +347,59 @@ public:
                 return;
             }
             try {
-                if (req.body.empty()) { res.status = 400; res.set_header("Content-Type","application/json; charset=utf-8"); res.body = "{\"error\":\"Empty request body\"}"; return; }
+                if (req.body.empty()) {
+                    res.status = 400;
+                    res.set_header("Content-Type", "application/json; charset=utf-8");
+                    res.body = "{\"error\":\"Empty request body\"}";
+                    return;
+                }
                 json body = json::parse(req.body);
+
                 unordered_map<string, json> node_requests;
-                vector<string> local_keys;
-                vector<json> local_values;
+                unordered_map<string, json> local_requests;
+
                 for (auto& item : body.items()) {
                     string key = item.key();
                     auto value = item.value();
                     string target_node = getTargetNode(key);
                     string current_node = getCurrentNodeUrl();
-                    if (target_node == current_node) { local_keys.push_back(key); local_values.push_back(value); }
-                    else { node_requests[target_node][key] = value; }
-                }
-                // 本地批量写
-                {
-                    unique_lock<shared_mutex> ul(cache_mutex);
-                    for (size_t i = 0; i < local_keys.size(); ++i) setLocal(local_keys[i], local_values[i]);
-                }
-                // 远程按节点批量写（每个节点一次请求）
-                for (const auto& [target_node, request_data] : node_requests) {
-                    if (!rpcSetBatch(target_node, request_data)) {
-                        res.status = 500; res.body = "Internal server error"; return;
+                    if (target_node == current_node) {
+                        local_requests[key] = value;
+                    } else {
+                        node_requests[target_node][key] = value;
                     }
                 }
-                res.status = 200; res.set_header("Content-Type","application/json; charset=utf-8"); res.body = "OK";
+
+                {
+                    unique_lock<shared_mutex> ul(cache_mutex);
+                    for (auto& kv : local_requests) {
+                        setLocal(kv.first, kv.second);
+                    }
+                }
+
+                for (const auto& [target_node, kvs] : node_requests) {
+                    bool ok = rpcSetBatch(target_node, kvs);
+                    if (!ok) {
+                        cerr << "[WARN] Failed to sync to " << target_node << endl;
+                    }
+                }
+
+                res.status = 200;
+                res.set_header("Content-Type", "application/json; charset=utf-8");
+                res.body = "OK";
             } catch (const exception& e) {
-                res.status = 400; res.body = string("Bad request: ") + e.what();
+                res.status = 400;
+                res.body = string("Bad request: ") + e.what();
             }
         });
 
         server.Get(R"(/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
-            if (!checkRateLimit()) { res.status = 429; res.set_header("Content-Type","application/json; charset=utf-8"); res.body = "{\"error\":\"Rate limit exceeded\"}"; return; }
+            if (!checkRateLimit()) {
+                res.status = 429;
+                res.set_header("Content-Type", "application/json; charset=utf-8");
+                res.body = "{\"error\":\"Rate limit exceeded\"}";
+                return;
+            }
             if (req.matches.empty()) { res.status = 400; res.body = "Invalid request"; return; }
             string key = req.matches[0];
             string target_node = getTargetNode(key);
@@ -465,7 +412,12 @@ public:
         });
 
         server.Delete(R"(/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
-            if (!checkRateLimit()) { res.status = 429; res.set_header("Content-Type","application/json; charset=utf-8"); res.body = "{\"error\":\"Rate limit exceeded\"}"; return; }
+            if (!checkRateLimit()) {
+                res.status = 429;
+                res.set_header("Content-Type", "application/json; charset=utf-8");
+                res.body = "{\"error\":\"Rate limit exceeded\"}";
+                return;
+            }
             if (req.matches.empty()) { res.status = 400; res.body = "Invalid request"; return; }
             string key = req.matches[0];
             string target_node = getTargetNode(key);
@@ -504,7 +456,6 @@ public:
             res.status = 200; res.body = to_string(deleted);
         });
 
-        // 后台健康检查线程
         thread health_check_thread([this]() {
             while (true) {
                 this_thread::sleep_for(seconds(10));
@@ -525,11 +476,4 @@ int main(int argc, char* argv[]) {
     int port = atoi(argv[1]);
     string node_id = "node" + to_string(port);
     vector<string> all_nodes = {
-        "http://cache-server-1:9527",
-        "http://cache-server-2:9528",
-        "http://cache-server-3:9529"
-    };
-    CacheNode node(node_id, port, all_nodes);
-    node.start();
-    return 0;
-}
+        "http://127
