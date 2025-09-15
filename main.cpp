@@ -26,11 +26,12 @@ struct NodeStats {
     atomic<int> request_count{0};
     atomic<int> success_count{0};
     atomic<int> error_count{0};
-    atomic<double> total_response_time{0.0};
-    atomic<double> avg_response_time{0.0};
+    double total_response_time{0.0};
+    double avg_response_time{0.0};
     atomic<bool> is_healthy{true};
     time_point<steady_clock> last_check;
     time_point<steady_clock> last_request;
+    mutable mutex time_mutex;  // 保护 double
 
     NodeStats() : last_check(steady_clock::now()), last_request(steady_clock::now()) {}
 
@@ -38,11 +39,11 @@ struct NodeStats {
         request_count++;
         if (success) success_count++;
         else error_count++;
-        total_response_time.fetch_add(response_time, memory_order_relaxed);
-        int total = request_count.load();
-        if (total > 0) {
-            double avg = total_response_time.load(memory_order_relaxed) / total;
-            avg_response_time.store(avg, memory_order_relaxed);
+        {
+            lock_guard<mutex> lk(time_mutex);
+            total_response_time += response_time;
+            int total = request_count.load();
+            if (total > 0) avg_response_time = total_response_time / total;
         }
         last_request = steady_clock::now();
     }
@@ -53,12 +54,14 @@ struct NodeStats {
     }
 
     bool isHealthy() const {
+        lock_guard<mutex> lk(time_mutex);
         return is_healthy.load() &&
                getErrorRate() < 0.3 &&
-               avg_response_time.load() < 1000.0 &&
+               avg_response_time < 1000.0 &&
                duration_cast<seconds>(steady_clock::now() - last_request).count() < 30;
     }
 };
+
 
 // ========================== ConsistentHash ==========================
 class ConsistentHash {
