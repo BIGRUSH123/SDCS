@@ -11,6 +11,7 @@ RUN sed -i 's@//.*archive.ubuntu.com@//mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/
 RUN apt-get update && apt-get install -y \
     g++ \
     make \
+    curl \
     nlohmann-json3-dev \
     && rm -rf /var/lib/apt/lists/*
 

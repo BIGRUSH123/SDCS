@@ -2,13 +2,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <thread>
-#include <mutex>
-#include <algorithm>
-#include <sstream>
-#include <iomanip>
+#include <shared_mutex>
 #include <cstdlib>
-#include <cstring>
 #include <map>
 #include "httplib.h"
 #include <nlohmann/json.hpp>
@@ -16,19 +11,22 @@
 using json = nlohmann::json;
 using namespace std;
 
+// 配置常量
+namespace Config {
+    constexpr int VIRTUAL_NODES = 150;
+    constexpr int RPC_TIMEOUT_SECONDS = 5;
+    constexpr int PORT_BASE = 9526;
+}
+
 class ConsistentHash {
 private:
     map<uint32_t, string> ring;
     vector<string> nodes;
-    int virtual_nodes = 150;
+    int virtual_nodes = Config::VIRTUAL_NODES;
 
     uint32_t hash(const string& key) {
-        // 简单的哈希函数
-        uint32_t hash = 0;
-        for (char c : key) {
-            hash = hash * 31 + c;
-        }
-        return hash;
+        // 使用标准库的哈希函数，分布更均匀
+        return static_cast<uint32_t>(std::hash<string>{}(key));
     }
 
 public:
@@ -60,11 +58,12 @@ public:
 class CacheNode {
 private:
     unordered_map<string, json> cache;
-    mutex cache_mutex;
+    shared_mutex cache_mutex;
     ConsistentHash consistent_hash;
     string node_id;
     int port;
     vector<string> all_nodes;
+    string current_node_url;
 
 public:
     CacheNode(const string& id, int p, const vector<string>& nodes) 
@@ -73,16 +72,18 @@ public:
         for (const auto& node : nodes) {
             consistent_hash.addNode(node);
         }
+        // 预计算当前节点URL
+        current_node_url = "http://cache-server-" + to_string(port - Config::PORT_BASE) + ":" + to_string(port);
     }
 
     // 本地存储操作
     void setLocal(const string& key, const json& value) {
-        lock_guard<mutex> lock(cache_mutex);
+        unique_lock<shared_mutex> lock(cache_mutex);
         cache[key] = value;
     }
 
     json getLocal(const string& key) {
-        lock_guard<mutex> lock(cache_mutex);
+        shared_lock<shared_mutex> lock(cache_mutex);
         auto it = cache.find(key);
         if (it != cache.end()) {
             return it->second;
@@ -91,7 +92,7 @@ public:
     }
 
     bool deleteLocal(const string& key) {
-        lock_guard<mutex> lock(cache_mutex);
+        unique_lock<shared_mutex> lock(cache_mutex);
         auto it = cache.find(key);
         if (it != cache.end()) {
             cache.erase(it);
@@ -105,26 +106,49 @@ public:
         return consistent_hash.getNode(key);
     }
 
+    // 获取当前节点地址
+    const string& getCurrentNode() {
+        return current_node_url;
+    }
+
+    // HTTP响应辅助函数
+    void setJsonResponse(httplib::Response& res, int status, const string& body) {
+        res.status = status;
+        res.set_header("Content-Type", "application/json; charset=utf-8");
+        res.body = body;
+    }
+
+    void setErrorResponse(httplib::Response& res, int status, const string& error) {
+        setJsonResponse(res, status, "{\"error\": \"" + error + "\"}");
+    }
+
+    void setSuccessResponse(httplib::Response& res, const string& body = "OK") {
+        setJsonResponse(res, 200, body);
+    }
+
+    // RPC客户端工厂方法
+    httplib::Client createRpcClient(const string& target_node) {
+        httplib::Client client(target_node);
+        client.set_connection_timeout(Config::RPC_TIMEOUT_SECONDS, 0);
+        return client;
+    }
+
     // 内部RPC调用
     json rpcGet(const string& target_node, const string& key) {
-        httplib::Client client(target_node);
-        client.set_connection_timeout(5, 0); // 5秒超时
-        
+        auto client = createRpcClient(target_node);
         auto res = client.Get("/internal/get/" + key);
         if (res && res->status == 200) {
             try {
                 return json::parse(res->body);
             } catch (const exception& e) {
-                cout << "RPC GET 解析JSON失败: " << e.what() << endl;
+                // JSON解析失败，返回null
             }
         }
         return json::value_t::null;
     }
 
     bool rpcSet(const string& target_node, const string& key, const json& value) {
-        httplib::Client client(target_node);
-        client.set_connection_timeout(5, 0);
-        
+        auto client = createRpcClient(target_node);
         json request;
         request[key] = value;
         
@@ -133,15 +157,13 @@ public:
     }
 
     int rpcDelete(const string& target_node, const string& key) {
-        httplib::Client client(target_node);
-        client.set_connection_timeout(5, 0);
-        
+        auto client = createRpcClient(target_node);
         auto res = client.Delete("/internal/delete/" + key);
         if (res && res->status == 200) {
             try {
                 return stoi(res->body);
             } catch (const exception& e) {
-                cout << "RPC DELETE 解析响应失败: " << e.what() << endl;
+                // 响应解析失败，返回0
             }
         }
         return 0;
@@ -152,7 +174,7 @@ public:
         httplib::Server server;
 
         // 设置CORS头
-        server.set_pre_routing_handler([](const httplib::Request& /* req */, httplib::Response& res) {
+        server.set_pre_routing_handler([](const httplib::Request&, httplib::Response& res) {
             res.set_header("Access-Control-Allow-Origin", "*");
             res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
             res.set_header("Access-Control-Allow-Headers", "Content-Type");
@@ -160,7 +182,7 @@ public:
         });
 
         // OPTIONS处理
-        server.Options(".*", [](const httplib::Request&, httplib::Response& /* res */) {
+        server.Options(".*", [](const httplib::Request&, httplib::Response&) {
             return;
         });
 
@@ -174,14 +196,8 @@ public:
         // POST / - 写入/更新缓存
         server.Post("/", [this](const httplib::Request& req, httplib::Response& res) {
             try {
-                // 调试信息
-                cout << "收到POST请求，body长度: " << req.body.length() << endl;
-                cout << "请求体内容: '" << req.body << "'" << endl;
-                
                 if (req.body.empty()) {
-                    res.status = 400;
-                    res.set_header("Content-Type", "application/json; charset=utf-8");
-                    res.body = "{\"error\": \"Empty request body\"}";
+                    setErrorResponse(res, 400, "Empty request body");
                     return;
                 }
                 
@@ -191,7 +207,7 @@ public:
                     string key = item.key();
                     auto value = item.value();
                     string target_node = getTargetNode(key);
-                    string current_node = "http://cache-server-" + to_string(port - 9526) + ":" + to_string(port);
+                    string current_node = getCurrentNode();
                     
                     if (target_node == current_node) {
                         // 数据应该存储在当前节点
@@ -199,32 +215,27 @@ public:
                     } else {
                         // 数据应该存储在其他节点，通过RPC发送
                         if (!rpcSet(target_node, key, value)) {
-                            res.status = 500;
-                            res.body = "Internal server error";
+                            setErrorResponse(res, 500, "Internal server error");
                             return;
                         }
                     }
                 }
                 
-                res.status = 200;
-                res.set_header("Content-Type", "application/json; charset=utf-8");
-                res.body = "OK";
+                setSuccessResponse(res);
             } catch (const exception& e) {
-                res.status = 400;
-                res.body = "Bad request: " + string(e.what());
+                setErrorResponse(res, 400, "Bad request: " + string(e.what()));
             }
         });
 
         // GET /{key} - 读取缓存
         server.Get(R"(/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
             if (req.matches.empty()) {
-                res.status = 400;
-                res.body = "Invalid request";
+                setErrorResponse(res, 400, "Invalid request");
                 return;
             }
             string key = req.matches[0];
             string target_node = getTargetNode(key);
-            string current_node = "http://cache-server-" + to_string(port - 9526) + ":" + to_string(port);
+            string current_node = getCurrentNode();
             
             json result;
             if (target_node == current_node) {
@@ -238,24 +249,21 @@ public:
             if (result.is_null()) {
                 res.status = 404;
             } else {
-                res.status = 200;
-                res.set_header("Content-Type", "application/json; charset=utf-8");
                 json response;
                 response[key] = result;
-                res.body = response.dump();
+                setJsonResponse(res, 200, response.dump());
             }
         });
 
         // DELETE /{key} - 删除缓存
         server.Delete(R"(/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
             if (req.matches.empty()) {
-                res.status = 400;
-                res.body = "Invalid request";
+                setErrorResponse(res, 400, "Invalid request");
                 return;
             }
             string key = req.matches[0];
             string target_node = getTargetNode(key);
-            string current_node = "http://cache-server-" + to_string(port - 9526) + ":" + to_string(port);
+            string current_node = getCurrentNode();
             
             int deleted = 0;
             if (target_node == current_node) {
@@ -266,16 +274,13 @@ public:
                 deleted = rpcDelete(target_node, key);
             }
             
-            res.status = 200;
-            res.set_header("Content-Type", "application/json; charset=utf-8");
-            res.body = to_string(deleted);
+            setJsonResponse(res, 200, to_string(deleted));
         });
 
         // 内部RPC接口
         server.Get(R"(/internal/get/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
             if (req.matches.empty()) {
-                res.status = 400;
-                res.body = "Invalid request";
+                setErrorResponse(res, 400, "Invalid request");
                 return;
             }
             string key = req.matches[0];
@@ -284,9 +289,7 @@ public:
             if (result.is_null()) {
                 res.status = 404;
             } else {
-                res.status = 200;
-                res.set_header("Content-Type", "application/json; charset=utf-8");
-                res.body = result.dump();
+                setJsonResponse(res, 200, result.dump());
             }
         });
 
@@ -298,24 +301,20 @@ public:
                     auto value = item.value();
                     setLocal(key, value);
                 }
-                res.status = 200;
-                res.body = "OK";
+                setSuccessResponse(res);
             } catch (const exception& e) {
-                res.status = 400;
-                res.body = "Bad request: " + string(e.what());
+                setErrorResponse(res, 400, "Bad request: " + string(e.what()));
             }
         });
 
         server.Delete(R"(/internal/delete/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
             if (req.matches.empty()) {
-                res.status = 400;
-                res.body = "Invalid request";
+                setErrorResponse(res, 400, "Invalid request");
                 return;
             }
             string key = req.matches[0];
             int deleted = deleteLocal(key) ? 1 : 0;
-            res.status = 200;
-            res.body = to_string(deleted);
+            setJsonResponse(res, 200, to_string(deleted));
         });
 
 

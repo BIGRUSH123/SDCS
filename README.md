@@ -223,13 +223,8 @@ docker-compose logs -f
 ├── docker-compose.yaml   # Docker Compose配置
 ├── Makefile             # 编译脚本
 ├── build_and_run.bat    # Windows构建脚本
-├── build_and_run.ps1    # PowerShell构建脚本
-├── build_and_run.sh     # Linux/macOS构建脚本
-├── test.ps1             # PowerShell测试脚本
-├── test_simple.ps1      # 简化PowerShell测试脚本
-├── test.sh              # Linux/macOS测试脚本
+├── test.cmd             # Windows测试脚本
 ├── test_stress.sh       # Linux压力测试脚本
-├── .github/workflows/   # CI/CD配置
 └── README.md            # 项目文档
 ```
 
@@ -281,12 +276,7 @@ docker stats
 ### API性能测试
 ```bash
 # 使用curl测试响应时间
-curl -w "@curl-format.txt" -o /dev/null http://localhost:9527/health
-
-# curl-format.txt内容：
-#      time_total:  %{time_total}\n
-#   time_connect:  %{time_connect}\n
-#time_starttransfer:  %{time_starttransfer}\n
+curl -w "time_total: %{time_total}\ntime_connect: %{time_connect}\ntime_starttransfer: %{time_starttransfer}\n" -o /dev/null http://localhost:9527/health
 ```
 
 ## 系统限制
@@ -303,14 +293,6 @@ curl -w "@curl-format.txt" -o /dev/null http://localhost:9527/health
 3. 支持动态节点管理
 4. 添加监控和日志功能
 5. 实现更高效的网络协议（如gRPC）
-
-## CI/CD
-
-项目包含GitHub Actions配置，支持自动化构建和测试：
-
-- 自动构建Docker镜像
-- 运行功能测试
-- 跨平台兼容性检查
 
 ## 许可证
 
